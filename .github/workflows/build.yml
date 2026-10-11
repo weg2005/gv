@@ -64,11 +64,11 @@ jobs:
 
 
       # ============================================================
-      # 5. INSTALLATION INITIALE DES OUTILS
+      # 5. INSTALLATION INITIALE DES OUTILS (SETUPLOOK FIXÉ À 58.3.0)
       # ============================================================
       - name: Installer Buildozer et Cython
         run: |
-          python -m pip install "pip<24.1" "setuptools<70.0.0" wheel
+          python -m pip install "pip<24.1" "setuptools==58.3.0" wheel
           pip install buildozer
           pip install "cython<3.1.0"
           pip install legacy-cgi
@@ -214,7 +214,7 @@ jobs:
 
 
       # ============================================================
-      # 10. COMPILATION AVEC VEILLEUR TEMPS RÉEL SUR BUILD.PY
+      # 10. COMPILATION AVEC LE CORRECTIF DISTUTILS
       # ============================================================
       - name: Compiler APK
         run: |
@@ -222,49 +222,38 @@ jobs:
           cp -r projet/* /tmp/a/
           cd /tmp/a
 
-          echo "================================================="
-          echo "LANCEMENT DU SENTINELLE DE SURVEILLANCE BUILD.PY"
-          echo "================================================="
-
-          # Script en arrière-plan qui intercepte et patche instantanément build.py dès sa création
+          # Chasseur radical de tarfile (conserve la sécurité anti-plantage)
           (
             while true; do
-              for f in $(find /tmp/a -name "build.py" 2>/dev/null); do
-                if [ -f "$f" ] && ! grep -q "PAX_FORMAT" "$f"; then
-                  sed -i 's/tarfile.open(/tarfile.open(format=tarfile.PAX_FORMAT, /g' "$f" || true
-                  sed -i '1i import tarfile; tarfile.DEFAULT_FORMAT = tarfile.PAX_FORMAT' "$f" || true
-                  echo ">>> [SENTINelle] build.py intercepté et patché avec succès !"
+              for tf in $(find /tmp/a -name "tarfile.py" 2>/dev/null); do
+                if [ -f "$tf" ] && ! grep -q "RADICAL_PATCH" "$tf"; then
+                  sed -i 's/raise ValueError("name is too long")/# RADICAL_PATCH\n        format = PAX_FORMAT/g' "$tf" || true
+                  sed -i 's/DEFAULT_FORMAT = GNU_FORMAT/DEFAULT_FORMAT = PAX_FORMAT/g' "$tf" || true
                 fi
               done
-              sleep 0.2
+              sleep 0.1
             done
           ) &
-          SENTINEL_PID=$!
+          RADICAL_PID=$!
 
-          # Fichier de contraintes Pip
           echo "pip<24.1" > /tmp/pip_constraints.txt
-          echo "setuptools<70.0.0" >> /tmp/pip_constraints.txt
-
-          echo "================================================="
-          echo "DÉBUT DE LA COMPILATION APK"
-          echo "================================================="
+          echo "setuptools==58.3.0" >> /tmp/pip_constraints.txt
 
           export PIP_CONSTRAINT="/tmp/pip_constraints.txt"
           export PIP_DISABLE_PIP_VERSION_CHECK="1"
+          export SETUPTOOLS_USE_DISTUTILS="stdlib"
           export ACLOCAL_PATH="/usr/share/aclocal:/usr/share/libtool/m4"
           export LIBTOOLIZE="libtoolize"
 
-          # Compilation dans /tmp/a
+          # Lancement de la compilation
           buildozer -v android debug || EXIT_CODE=$?
 
-          # Arrêt du sentinelle
-          kill $SENTINEL_PID 2>/dev/null || true
+          kill $RADICAL_PID 2>/dev/null || true
 
           if [ ${EXIT_CODE:-0} -ne 0 ]; then
             exit $EXIT_CODE
           fi
 
-          # Rapatriement de l'APK généré vers le workspace principal
           mkdir -p $GITHUB_WORKSPACE/projet/bin
           cp -r bin/*.apk $GITHUB_WORKSPACE/projet/bin/ 2>/dev/null || true
 
