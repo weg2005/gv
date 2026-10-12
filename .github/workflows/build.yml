@@ -117,7 +117,7 @@ jobs:
 
 
       # ============================================================
-      # 8. CONFIGURER BUILDOZER (LOG LEVEL RÉDUIT À 1)
+      # 8. CONFIGURER BUILDOZER
       # ============================================================
       - name: Configurer Buildozer
         working-directory: projet
@@ -169,7 +169,7 @@ jobs:
           sed -i '/^p4a.branch =/d' buildozer.spec
           sed -i '/^p4a.commit =/d' buildozer.spec
 
-          # Logs réduits à 1 pour éviter le spam de compilation standard
+          # Logs
           if grep -q '^log_level =' buildozer.spec; then
             sed -i 's/^log_level = .*/log_level = 1/' buildozer.spec
           else
@@ -214,7 +214,7 @@ jobs:
 
 
       # ============================================================
-      # 10. COMPILATION
+      # 10. COMPILATION AVEC FILTRAGE DES LOGS INUTILES
       # ============================================================
       - name: Compiler APK
         run: |
@@ -245,8 +245,9 @@ jobs:
           export ACLOCAL_PATH="/usr/share/aclocal:/usr/share/libtool/m4"
           export LIBTOOLIZE="libtoolize"
 
-          # Lancement de la compilation
-          buildozer -v android debug || EXIT_CODE=$?
+          # Lancement de la compilation en filtrant le spam de compilation Python
+          set -o pipefail
+          buildozer -v android debug 2>&1 | grep -v "Compiling '" || EXIT_CODE=$?
 
           kill $RADICAL_PID 2>/dev/null || true
 
