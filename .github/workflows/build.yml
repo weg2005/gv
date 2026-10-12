@@ -64,7 +64,7 @@ jobs:
 
 
       # ============================================================
-      # 5. INSTALLATION INITIALE DES OUTILS (SETUPLOOK FIXÉ À 58.3.0)
+      # 5. INSTALLATION INITIALE DES OUTILS
       # ============================================================
       - name: Installer Buildozer et Cython
         run: |
@@ -117,7 +117,7 @@ jobs:
 
 
       # ============================================================
-      # 8. CONFIGURER BUILDOZER
+      # 8. CONFIGURER BUILDOZER (LOG LEVEL RÉDUIT À 1)
       # ============================================================
       - name: Configurer Buildozer
         working-directory: projet
@@ -169,11 +169,11 @@ jobs:
           sed -i '/^p4a.branch =/d' buildozer.spec
           sed -i '/^p4a.commit =/d' buildozer.spec
 
-          # Logs
+          # Logs réduits à 1 pour éviter le spam de compilation standard
           if grep -q '^log_level =' buildozer.spec; then
-            sed -i 's/^log_level = .*/log_level = 2/' buildozer.spec
+            sed -i 's/^log_level = .*/log_level = 1/' buildozer.spec
           else
-            echo "log_level = 2" >> buildozer.spec
+            echo "log_level = 1" >> buildozer.spec
           fi
 
 
@@ -214,7 +214,7 @@ jobs:
 
 
       # ============================================================
-      # 10. COMPILATION AVEC LE CORRECTIF DISTUTILS
+      # 10. COMPILATION
       # ============================================================
       - name: Compiler APK
         run: |
@@ -222,7 +222,7 @@ jobs:
           cp -r projet/* /tmp/a/
           cd /tmp/a
 
-          # Chasseur radical de tarfile (conserve la sécurité anti-plantage)
+          # Chasseur radical de tarfile (sécurité permanente)
           (
             while true; do
               for tf in $(find /tmp/a -name "tarfile.py" 2>/dev/null); do
