@@ -1,272 +1,259 @@
+
 name: Compilateur APK Kivy
 
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 360
 
     steps:
-
-      # ============================================================
-      # 1. RÉCUPÉRER LE PROJET
-      # ============================================================
+      # 1. Récupérer le dépôt
       - name: Récupérer le projet
         uses: actions/checkout@v4
 
-
-      # ============================================================
-      # 2. PYTHON HÔTE (Python 3.11)
-      # ============================================================
+      # 2. Python hôte
       - name: Installer Python 3.11
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.11.11"
+          cache: "pip"
 
-
-      # ============================================================
-      # 3. JAVA 17
-      # ============================================================
+      # 3. Java
       - name: Installer Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-
-      # ============================================================
-      # 4. DÉPENDANCES LINUX
-      # ============================================================
-      - name: Installer les dépendances Linux
+      # 4. Dépendances Linux
+      - name: Installer les dépendances
         run: |
           sudo apt-get update
-
           sudo apt-get install -y \
-            git \
-            zip \
-            unzip \
-            autoconf \
-            automake \
-            libtool \
-            libtool-bin \
-            libltdl-dev \
-            gettext \
-            autopoint \
-            pkg-config \
-            zlib1g-dev \
-            libncurses5-dev \
-            libncursesw5-dev \
-            cmake \
-            libffi-dev \
-            libssl-dev \
-            curl
+            git zip unzip \
+            autoconf automake libtool libtool-bin \
+            libltdl-dev gettext autopoint pkg-config \
+            zlib1g-dev libncurses5-dev libncursesw5-dev \
+            cmake libffi-dev libssl-dev \
+            libsqlite3-dev libbz2-dev \
+            build-essential ccache patch \
+            curl wget
 
-
-      # ============================================================
-      # 5. INSTALLATION INITIALE DES OUTILS
-      # ============================================================
+      # 5. Installer des versions fixes des outils
       - name: Installer Buildozer et Cython
         run: |
-          python -m pip install "pip<24.1" "setuptools==58.3.0" wheel
-          pip install buildozer
-          pip install "cython<3.1.0"
-          pip install legacy-cgi
+          python -m pip install --upgrade "pip<24.1"
+          python -m pip install \
+            "setuptools==69.5.1" \
+            "wheel==0.43.0" \
+            "buildozer==1.5.0" \
+            "Cython==0.29.36"
 
+          buildozer --version
+          cython --version
+          python --version
 
-      # ============================================================
-      # 6. DÉCOMPRESSER LE PROJET ET PRÉPARER MAIN.PY
-      # ============================================================
-      - name: Décompresser le projet et préparer main.py
+      # 6. Vérifier et extraire l'archive du projet
+      - name: Extraire et nettoyer le projet
+        shell: bash
         run: |
-          mkdir -p projet
+          set -euo pipefail
 
-          unzip -o sql_stock.zip -d projet
-
-          # Suppression des répertoires indésirables
-          find projet -name ".buildozer" -type d -exec rm -rf {} +
-          find projet -name ".bin" -type d -exec rm -rf {} +
-
-          # Si le ZIP extrait un sous-dossier unique, remonter les fichiers
-          if [ $(ls -1 projet | wc -l) -eq 1 ] && [ -d projet/* ]; then
-            echo "Déplacement des fichiers depuis le sous-dossier extrait..."
-            mv projet/*/* projet/ 2>/dev/null || true
+          if [ ! -f sql_stock.zip ]; then
+            echo "ERREUR : sql_stock.zip est absent du dépôt."
+            ls -la
+            exit 1
           fi
 
-          # Garantir l'existence de main.py
-          cd projet
-          if [ ! -f "main.py" ]; then
-            ALT_MAIN=$(ls *.py 2>/dev/null | head -n 1)
-            if [ -n "$ALT_MAIN" ]; then
-              echo "Renommage de $ALT_MAIN en main.py"
-              mv "$ALT_MAIN" main.py
-            else
-              echo "ERREUR: Aucun fichier .py trouvé dans le projet!"
+          mkdir -p projet
+          unzip -q sql_stock.zip -d projet
+
+          # Éliminer les anciens environnements et caches
+          find projet -type d \( \
+            -name .buildozer -o \
+            -name .git -o \
+            -name __pycache__ -o \
+            -name .venv -o \
+            -name venv \
+          \) -prune -exec rm -rf {} +
+
+          find projet -type f \( \
+            -name "*.pyc" -o \
+            -name "*.pyo" \
+          \) -delete
+
+          # Repérer le véritable dossier de l'application
+          if [ ! -f projet/main.py ]; then
+            mapfile -t fichiers < <(
+              find projet -maxdepth 4 -type f -name main.py
+            )
+
+            if [ "${#fichiers[@]}" -ne 1 ]; then
+              echo "ERREUR : main.py absent ou ambigu."
+              find projet -maxdepth 4 -type f
               exit 1
             fi
+
+            dossier="$(dirname "${fichiers[0]}")"
+            mkdir -p source_temp
+            cp -a "$dossier"/. source_temp/
+            rm -rf projet
+            mv source_temp projet
           fi
 
+          echo "Fichiers de l'application :"
+          find projet -maxdepth 2 -type f | head -200
 
-      # ============================================================
-      # 7. CRÉER BUILDOZER.SPEC
-      # ============================================================
+      # 7. Créer la configuration Buildozer
       - name: Créer buildozer.spec
         working-directory: projet
         run: |
+          set -euo pipefail
           buildozer init
 
-
-      # ============================================================
-      # 8. CONFIGURER BUILDOZER
-      # ============================================================
+      # 8. Configurer l'application et les versions Android
       - name: Configurer Buildozer
         working-directory: projet
+        shell: bash
         run: |
+          set -euo pipefail
 
-          # Application
-          sed -i 's/^title = .*/title = Gestion Vente/' buildozer.spec
-          sed -i 's/^package.name = .*/package.name = gestionvente/' buildozer.spec
-          sed -i 's/^package.domain = .*/package.domain = org.gestion/' buildozer.spec
+          python - <<'PY'
+          from pathlib import Path
+          import re
 
-          # DÉPENDANCES
-          sed -i 's/^requirements = .*/requirements = hostpython3==3.11.0,python3==3.11.0,kivy/' buildozer.spec
+          path = Path("buildozer.spec")
+          text = path.read_text()
 
-          # Orientation & Fichiers
-          sed -i 's/^orientation = .*/orientation = portrait/' buildozer.spec
-          sed -i 's/^source.include_exts = .*/source.include_exts = py,png,jpg,jpeg,kv,atlas,db,ttf,txt/' buildozer.spec
+          def set_value(key, value):
+              global text
+              pattern = rf"(?m)^\s*#?\s*{re.escape(key)}\s*=.*$"
+              replacement = f"{key} = {value}"
+              if re.search(pattern, text):
+                  text = re.sub(pattern, replacement, text, count=1)
+              else:
+                  text += f"\n{replacement}\n"
 
-          # Exclure tous les dossiers de test et de documentation inutiles
-          sed -i 's/^# android.exclude_src = .*/android.exclude_src = tests, test, lib2to3\/tests, doc, docs/' buildozer.spec
+          values = {
+              "title": "Gestion Vente",
+              "package.name": "gestionvente",
+              "package.domain": "org.gestion",
+              "source.dir": ".",
+              "source.include_exts":
+                  "py,png,jpg,jpeg,kv,atlas,db,ttf,txt,json",
+              "source.exclude_dirs":
+                  ".buildozer,.git,__pycache__,venv,.venv,tests,docs,bin",
+              "version": "1.0.0",
+              "orientation": "portrait",
+              "fullscreen": "0",
+              "requirements":
+                  "python3==3.11.0,kivy==2.3.0",
+              "android.api": "34",
+              "android.minapi": "24",
+              "android.ndk": "25b",
+              "android.ndk_api": "24",
+              "android.archs": "arm64-v8a",
+              "android.accept_sdk_license": "True",
+              "android.build_tools_version": "34.0.0",
+              "p4a.url":
+                  "https://github.com/kivy/python-for-android",
+              "p4a.branch": "v2024.01.21",
+              "log_level": "2",
+          }
 
-          # API Android, Build-Tools et NDK
-          if grep -q '^android.api =' buildozer.spec; then
-            sed -i 's/^android.api = .*/android.api = 33/' buildozer.spec
-          else
-            echo "android.api = 33" >> buildozer.spec
-          fi
+          for key, value in values.items():
+              set_value(key, value)
 
-          if grep -q '^android.minapi =' buildozer.spec; then
-            sed -i 's/^android.minapi = .*/android.minapi = 24/' buildozer.spec
-          else
-            echo "android.minapi = 24" >> buildozer.spec
-          fi
+          # Garder les fichiers de l'application hors du répertoire
+          # contenant les fichiers intermédiaires de compilation.
+          if "[buildozer]" not in text:
+              text += "\n[buildozer]\n"
 
-          if grep -q '^android.ndk =' buildozer.spec; then
-            sed -i 's/^android.ndk = .*/android.ndk = 25b/' buildozer.spec
-          else
-            echo "android.ndk = 25b" >> buildozer.spec
-          fi
+          section = text.split("[buildozer]", 1)
+          before = section[0]
+          after = section[1]
 
-          if grep -q '^android.build_tools_version =' buildozer.spec; then
-            sed -i 's/^android.build_tools_version = .*/android.build_tools_version = 33.0.2/' buildozer.spec
-          else
-            echo "android.build_tools_version = 33.0.2" >> buildozer.spec
-          fi
+          after = re.sub(
+              r"(?m)^\s*#?\s*build_dir\s*=.*$\n?",
+              "",
+              after,
+          )
+          after = "\nbuild_dir = /tmp/buildozer_build\n" + after
+          text = before + "[buildozer]" + after
 
-          # Nettoyage p4a
-          sed -i '/^p4a.url =/d' buildozer.spec
-          sed -i '/^p4a.fork =/d' buildozer.spec
-          sed -i '/^p4a.branch =/d' buildozer.spec
-          sed -i '/^p4a.commit =/d' buildozer.spec
+          path.write_text(text)
+          print(path.read_text())
+          PY
 
-          # Logs
-          if grep -q '^log_level =' buildozer.spec; then
-            sed -i 's/^log_level = .*/log_level = 1/' buildozer.spec
-          else
-            echo "log_level = 1" >> buildozer.spec
-          fi
-
-
-      # ============================================================
-      # 9. PRÉPARER LE SDK ANDROID ET LES LICENCES
-      # ============================================================
-      - name: Configuration du SDK Android
+      # 9. Vérifier les chemins avant compilation
+      - name: Vérifier les sources
+        working-directory: projet
         run: |
-          SDK_DIR="$HOME/.buildozer/android/platform/android-sdk"
-          mkdir -p "$SDK_DIR/cmdline-tools"
-          mkdir -p "$SDK_DIR/tools/bin"
-          mkdir -p "$SDK_DIR/licenses"
-          mkdir -p "$HOME/.android"
-          touch "$HOME/.android/repositories.cfg"
+          set -euo pipefail
 
-          # 1. Commandline tools
-          curl -sS -o cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q cmdline-tools.zip -d "$SDK_DIR/cmdline-tools"
-          mv "$SDK_DIR/cmdline-tools/cmdline-tools" "$SDK_DIR/cmdline-tools/latest"
-          rm cmdline-tools.zip
+          test -f main.py
+          test -f buildozer.spec
 
-          # 2. Liens symboliques
-          ln -sf "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" "$SDK_DIR/tools/bin/sdkmanager"
-          ln -sf "$SDK_DIR/cmdline-tools/latest/bin/avdmanager" "$SDK_DIR/tools/bin/avdmanager"
+          if find . -type d -name .buildozer -print -quit |
+             grep -q .; then
+            echo "ERREUR : un .buildozer est présent dans les sources."
+            exit 1
+          fi
 
-          # 3. Licences
-          LICENSES_CONTENT="\n89330d222637a000b01f7e9f4a3f656c78f4382f\nd56f5187479451eabf01fb78af6dfcb131a6481e\n2433373577d3e887a181e5a4af937d15d0433c50\ncd5010c71487d008b8b70f074d23258832a82390"
-          PREVIEW_CONTENT="\n84831b94fe1430d75d55046884d77649db190779"
+          echo "Répertoire source : $(pwd)"
+          echo "Répertoire de compilation : /tmp/buildozer_build"
 
-          echo -e "$LICENSES_CONTENT" > "$SDK_DIR/licenses/android-sdk-license"
-          echo -e "$PREVIEW_CONTENT" > "$SDK_DIR/licenses/android-sdk-preview-license"
-
-          # 4. Acceptation globale
-          yes | "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK_DIR" --licenses || true
-
-          # 5. Pré-installation build-tools
-          "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK_DIR" "platforms;android-33" "build-tools;33.0.2" "platform-tools"
-
-
-      # ============================================================
-      # 10. COMPILATION AVEC FILTRAGE DES LOGS INUTILES
-      # ============================================================
+      # 10. Compiler
       - name: Compiler APK
+        working-directory: projet
+        shell: bash
+        env:
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
+          SETUPTOOLS_USE_DISTUTILS: stdlib
         run: |
-          mkdir -p /tmp/a
-          cp -r projet/* /tmp/a/
-          cd /tmp/a
-
-          # Chasseur radical de tarfile (sécurité permanente)
-          (
-            while true; do
-              for tf in $(find /tmp/a -name "tarfile.py" 2>/dev/null); do
-                if [ -f "$tf" ] && ! grep -q "RADICAL_PATCH" "$tf"; then
-                  sed -i 's/raise ValueError("name is too long")/# RADICAL_PATCH\n        format = PAX_FORMAT/g' "$tf" || true
-                  sed -i 's/DEFAULT_FORMAT = GNU_FORMAT/DEFAULT_FORMAT = PAX_FORMAT/g' "$tf" || true
-                fi
-              done
-              sleep 0.1
-            done
-          ) &
-          RADICAL_PID=$!
-
-          echo "pip<24.1" > /tmp/pip_constraints.txt
-          echo "setuptools==58.3.0" >> /tmp/pip_constraints.txt
-
-          export PIP_CONSTRAINT="/tmp/pip_constraints.txt"
-          export PIP_DISABLE_PIP_VERSION_CHECK="1"
-          export SETUPTOOLS_USE_DISTUTILS="stdlib"
-          export ACLOCAL_PATH="/usr/share/aclocal:/usr/share/libtool/m4"
-          export LIBTOOLIZE="libtoolize"
-
-          # Lancement de la compilation en filtrant le spam de compilation Python
           set -o pipefail
-          buildozer -v android debug 2>&1 | grep -v "Compiling '" || EXIT_CODE=$?
 
-          kill $RADICAL_PID 2>/dev/null || true
+          # Ne pas masquer les erreurs de compilation.
+          buildozer -v android debug 2>&1 |
+            tee "$GITHUB_WORKSPACE/compilation.log"
 
-          if [ ${EXIT_CODE:-0} -ne 0 ]; then
-            exit $EXIT_CODE
+          # Vérifier que l'APK existe réellement.
+          mkdir -p "$GITHUB_WORKSPACE/apk"
+          find /tmp/buildozer_build projet/bin \
+            -type f -name "*.apk" \
+            -exec cp -v {} "$GITHUB_WORKSPACE/apk/" \; \
+            2>/dev/null || true
+
+          if ! find "$GITHUB_WORKSPACE/apk" \
+              -maxdepth 1 -type f -name "*.apk" |
+              grep -q .; then
+            echo "ERREUR : aucun APK produit."
+            exit 1
           fi
 
-          mkdir -p $GITHUB_WORKSPACE/projet/bin
-          cp -r bin/*.apk $GITHUB_WORKSPACE/projet/bin/ 2>/dev/null || true
-
-
-      # ============================================================
-      # 11. RÉCUPÉRER L'APK
-      # ============================================================
-      - name: Récupérer APK
+      # 11. Publier l'APK
+      - name: Télécharger l'APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: gestion-vente-apk
-          path: projet/bin/*.apk
+          path: apk/*.apk
           if-no-files-found: error
+          retention-days: 7
+
+      # 12. Conserver les logs même en cas d'échec
+      - name: Récupérer les journaux
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-compilation
+          path: compilation.log
+          if-no-files-found: ignore
+          retention-days: 7
           
