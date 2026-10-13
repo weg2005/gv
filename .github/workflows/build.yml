@@ -17,14 +17,13 @@ jobs:
       - name: Récupérer le projet
         uses: actions/checkout@v4
 
-      # 2. Python hôte
+      # 2. Installer Python sans cache pip
       - name: Installer Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11.11"
-          cache: "pip"
 
-      # 3. Java
+      # 3. Installer Java
       - name: Installer Java 17
         uses: actions/setup-java@v4
         with:
@@ -32,35 +31,34 @@ jobs:
           java-version: "17"
 
       # 4. Dépendances Linux
-      - name: Installer les dépendances
+      - name: Installer les dépendances Linux
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            git zip unzip \
+            git zip unzip curl wget \
             autoconf automake libtool libtool-bin \
             libltdl-dev gettext autopoint pkg-config \
             zlib1g-dev libncurses5-dev libncursesw5-dev \
             cmake libffi-dev libssl-dev \
             libsqlite3-dev libbz2-dev \
-            build-essential ccache patch \
-            curl wget
+            build-essential ccache patch
 
-      # 5. Installer des versions fixes des outils
+      # 5. Installer les outils avec versions fixes
       - name: Installer Buildozer et Cython
         run: |
-          python -m pip install --upgrade "pip<24.1"
+          python -m pip install "pip<24.1"
           python -m pip install \
             "setuptools==69.5.1" \
             "wheel==0.43.0" \
             "buildozer==1.5.0" \
             "Cython==0.29.36"
 
+          python --version
           buildozer --version
           cython --version
-          python --version
 
-      # 6. Vérifier et extraire l'archive du projet
-      - name: Extraire et nettoyer le projet
+      # 6. Extraire et nettoyer le projet
+      - name: Préparer les sources
         shell: bash
         run: |
           set -euo pipefail
@@ -74,13 +72,14 @@ jobs:
           mkdir -p projet
           unzip -q sql_stock.zip -d projet
 
-          # Éliminer les anciens environnements et caches
+          # Éliminer les caches et anciennes compilations
           find projet -type d \( \
             -name .buildozer -o \
             -name .git -o \
             -name __pycache__ -o \
             -name .venv -o \
-            -name venv \
+            -name venv -o \
+            -name .pytest_cache \
           \) -prune -exec rm -rf {} +
 
           find projet -type f \( \
@@ -88,36 +87,38 @@ jobs:
             -name "*.pyo" \
           \) -delete
 
-          # Repérer le véritable dossier de l'application
+          # Repérer main.py dans l'archive
           if [ ! -f projet/main.py ]; then
-            mapfile -t fichiers < <(
-              find projet -maxdepth 4 -type f -name main.py
+            mapfile -t mains < <(
+              find projet -maxdepth 5 -type f -name main.py
             )
 
-            if [ "${#fichiers[@]}" -ne 1 ]; then
+            if [ "${#mains[@]}" -ne 1 ]; then
               echo "ERREUR : main.py absent ou ambigu."
-              find projet -maxdepth 4 -type f
+              find projet -maxdepth 5 -type f
               exit 1
             fi
 
-            dossier="$(dirname "${fichiers[0]}")"
+            dossier="$(dirname "${mains[0]}")"
             mkdir -p source_temp
             cp -a "$dossier"/. source_temp/
             rm -rf projet
             mv source_temp projet
           fi
 
-          echo "Fichiers de l'application :"
+          test -f projet/main.py
+
+          echo "Sources détectées :"
           find projet -maxdepth 2 -type f | head -200
 
-      # 7. Créer la configuration Buildozer
+      # 7. Générer la configuration Buildozer
       - name: Créer buildozer.spec
         working-directory: projet
         run: |
           set -euo pipefail
           buildozer init
 
-      # 8. Configurer l'application et les versions Android
+      # 8. Configurer l'application
       - name: Configurer Buildozer
         working-directory: projet
         shell: bash
@@ -125,20 +126,20 @@ jobs:
           set -euo pipefail
 
           python - <<'PY'
+          import configparser
           from pathlib import Path
-          import re
 
           path = Path("buildozer.spec")
-          text = path.read_text()
+          config = configparser.ConfigParser(
+              interpolation=None,
+              strict=False
+          )
+          config.optionxform = str
 
-          def set_value(key, value):
-              global text
-              pattern = rf"(?m)^\s*#?\s*{re.escape(key)}\s*=.*$"
-              replacement = f"{key} = {value}"
-              if re.search(pattern, text):
-                  text = re.sub(pattern, replacement, text, count=1)
-              else:
-                  text += f"\n{replacement}\n"
+          with path.open(encoding="utf-8") as f:
+              config.read_file(f)
+
+          app = config["app"]
 
           values = {
               "title": "Gestion Vente",
@@ -148,12 +149,11 @@ jobs:
               "source.include_exts":
                   "py,png,jpg,jpeg,kv,atlas,db,ttf,txt,json",
               "source.exclude_dirs":
-                  ".buildozer,.git,__pycache__,venv,.venv,tests,docs,bin",
+                  ".buildozer,.git,__pycache__,venv,.venv,tests,docs",
               "version": "1.0.0",
               "orientation": "portrait",
               "fullscreen": "0",
-              "requirements":
-                  "python3==3.11.0,kivy==2.3.0",
+              "requirements": "python3,kivy==2.3.0",
               "android.api": "34",
               "android.minapi": "24",
               "android.ndk": "25b",
@@ -164,52 +164,66 @@ jobs:
               "p4a.url":
                   "https://github.com/kivy/python-for-android",
               "p4a.branch": "v2024.01.21",
-              "log_level": "2",
           }
 
-          for key, value in values.items():
-              set_value(key, value)
+          app.update(values)
 
-          # Garder les fichiers de l'application hors du répertoire
-          # contenant les fichiers intermédiaires de compilation.
-          if "[buildozer]" not in text:
-              text += "\n[buildozer]\n"
+          if not config.has_section("buildozer"):
+              config.add_section("buildozer")
 
-          section = text.split("[buildozer]", 1)
-          before = section[0]
-          after = section[1]
+          config["buildozer"]["log_level"] = "2"
+          config["buildozer"]["warn_on_root"] = "0"
+          config["buildozer"]["build_dir"] = "/tmp/buildozer_build"
+          config["buildozer"]["bin_dir"] = "bin"
 
-          after = re.sub(
-              r"(?m)^\s*#?\s*build_dir\s*=.*$\n?",
-              "",
-              after,
-          )
-          after = "\nbuild_dir = /tmp/buildozer_build\n" + after
-          text = before + "[buildozer]" + after
+          with path.open("w", encoding="utf-8") as f:
+              config.write(f)
 
-          path.write_text(text)
           print(path.read_text())
           PY
 
-      # 9. Vérifier les chemins avant compilation
-      - name: Vérifier les sources
-        working-directory: projet
+      # 9. Corriger le format TAR sans modifier tarfile.py
+      - name: Préparer le correctif PAX
+        shell: bash
         run: |
           set -euo pipefail
 
-          test -f main.py
-          test -f buildozer.spec
+          mkdir -p "$GITHUB_WORKSPACE/tar_patch"
 
-          if find . -type d -name .buildozer -print -quit |
-             grep -q .; then
-            echo "ERREUR : un .buildozer est présent dans les sources."
-            exit 1
-          fi
+          cat > "$GITHUB_WORKSPACE/tar_patch/sitecustomize.py" <<'PY'
+          import tarfile
 
-          echo "Répertoire source : $(pwd)"
-          echo "Répertoire de compilation : /tmp/buildozer_build"
+          _original_tobuf = tarfile.TarInfo.tobuf
 
-      # 10. Compiler
+          def _pax_tobuf(self, format, encoding, errors):
+              if format == tarfile.USTAR_FORMAT:
+                  format = tarfile.PAX_FORMAT
+
+              return _original_tobuf(
+                  self, format, encoding, errors
+              )
+
+          tarfile.TarInfo.tobuf = _pax_tobuf
+
+          print(
+              "Correctif TAR PAX activé pour les archives USTAR",
+              flush=True
+          )
+          PY
+
+          export PYTHONPATH="$GITHUB_WORKSPACE/tar_patch${PYTHONPATH:+:$PYTHONPATH}"
+
+          python - <<'PY'
+          import tarfile
+          import sys
+
+          assert tarfile.TarInfo.tobuf is not None
+          print("Python :", sys.version)
+          print("tarfile :", tarfile.__file__)
+          print("PAX :", tarfile.PAX_FORMAT)
+          PY
+
+      # 10. Compiler l'APK
       - name: Compiler APK
         working-directory: projet
         shell: bash
@@ -217,28 +231,40 @@ jobs:
           PIP_DISABLE_PIP_VERSION_CHECK: "1"
           SETUPTOOLS_USE_DISTUTILS: stdlib
         run: |
-          set -o pipefail
+          set -uo pipefail
 
-          # Ne pas masquer les erreurs de compilation.
+          export PYTHONPATH="$GITHUB_WORKSPACE/tar_patch${PYTHONPATH:+:$PYTHONPATH}"
+
+          mkdir -p "$GITHUB_WORKSPACE/apk"
+
           buildozer -v android debug 2>&1 |
             tee "$GITHUB_WORKSPACE/compilation.log"
 
-          # Vérifier que l'APK existe réellement.
-          mkdir -p "$GITHUB_WORKSPACE/apk"
-          find /tmp/buildozer_build projet/bin \
-            -type f -name "*.apk" \
-            -exec cp -v {} "$GITHUB_WORKSPACE/apk/" \; \
-            2>/dev/null || true
+          result=${PIPESTATUS[0]}
+
+          if [ "$result" -ne 0 ]; then
+            echo "ÉCHEC : Buildozer a retourné le code $result."
+            exit "$result"
+          fi
+
+          # Chercher l'APK généré
+          if [ -d bin ]; then
+            find bin -maxdepth 1 -type f -name "*.apk" \
+              -exec cp -v {} "$GITHUB_WORKSPACE/apk/" \;
+          fi
 
           if ! find "$GITHUB_WORKSPACE/apk" \
               -maxdepth 1 -type f -name "*.apk" |
               grep -q .; then
-            echo "ERREUR : aucun APK produit."
+            echo "ERREUR : compilation terminée sans APK détecté."
             exit 1
           fi
 
+          echo "APK produit :"
+          ls -lh "$GITHUB_WORKSPACE/apk"
+
       # 11. Publier l'APK
-      - name: Télécharger l'APK
+      - name: Récupérer l'APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -247,7 +273,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # 12. Conserver les logs même en cas d'échec
+      # 12. Publier les logs même si la compilation échoue
       - name: Récupérer les journaux
         if: always()
         uses: actions/upload-artifact@v4
