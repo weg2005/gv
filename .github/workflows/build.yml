@@ -1,4 +1,3 @@
-
 name: Compilateur APK Kivy
 
 on:
@@ -13,24 +12,20 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      # 1. Récupération du dépôt
       - name: Récupérer le projet
         uses: actions/checkout@v4
 
-      # 2. Python hôte : aucun cache pip
       - name: Installer Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11.11"
 
-      # 3. Java 17
       - name: Installer Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      # 4. Dépendances système
       - name: Installer les dépendances Linux
         run: |
           set -e
@@ -44,7 +39,6 @@ jobs:
             libsqlite3-dev libbz2-dev \
             build-essential ccache patch
 
-      # 5. Versions fixes des outils
       - name: Installer Buildozer et Cython
         run: |
           set -e
@@ -59,7 +53,6 @@ jobs:
           buildozer --version
           cython --version
 
-      # 6. Extraction de l'application
       - name: Préparer les sources
         shell: bash
         run: |
@@ -71,10 +64,10 @@ jobs:
             exit 1
           }
 
-          mkdir projet
+          rm -rf projet
+          mkdir -p projet
           unzip -q sql_stock.zip -d projet
 
-          # Supprimer les anciens caches de compilation
           find projet -type d \( \
             -name .buildozer -o \
             -name .git -o \
@@ -89,7 +82,6 @@ jobs:
             -name "*.pyo" \
           \) -delete
 
-          # Repérer main.py dans l'archive
           if [ ! -f projet/main.py ]; then
             mapfile -t mains < <(
               find projet -maxdepth 5 -type f -name main.py
@@ -102,7 +94,8 @@ jobs:
             fi
 
             dossier="$(dirname "${mains[0]}")"
-            mkdir source_temp
+            rm -rf source_temp
+            mkdir -p source_temp
             cp -a "$dossier"/. source_temp/
             rm -rf projet
             mv source_temp projet
@@ -112,14 +105,12 @@ jobs:
           echo "Sources prêtes."
           find projet -maxdepth 2 -type f | head -200
 
-      # 7. Configuration Buildozer
       - name: Créer buildozer.spec
         working-directory: projet
         run: |
           set -e
           buildozer init
 
-      # 8. Configurer l'application
       - name: Configurer Buildozer
         working-directory: projet
         shell: bash
@@ -173,8 +164,6 @@ jobs:
               cfg.add_section("buildozer")
 
           cfg["buildozer"]["log_level"] = "2"
-          cfg["buildozer"]["build_dir"] = "/tmp/buildozer_build"
-          cfg["buildozer"]["bin_dir"] = "bin"
 
           with path.open("w", encoding="utf-8") as f:
               cfg.write(f)
@@ -182,8 +171,8 @@ jobs:
           print("Configuration Buildozer créée.")
           PY
 
-      # 9. Correctif TAR PAX sans sortie parasite
-      - name: Préparer le correctif TAR
+      # Correctif ciblé : convertir USTAR en PAX pour les chemins longs.
+      - name: Corriger TAR name too long
         shell: bash
         run: |
           set -euo pipefail
@@ -193,9 +182,9 @@ jobs:
           cat > "$GITHUB_WORKSPACE/tar_patch/sitecustomize.py" <<'PY'
           import tarfile
 
-          original_tobuf = tarfile.TarInfo.tobuf
+          _original_tobuf = tarfile.TarInfo.tobuf
 
-          def pax_tobuf(
+          def _pax_tobuf(
               self,
               format=tarfile.DEFAULT_FORMAT,
               encoding=tarfile.ENCODING,
@@ -204,16 +193,18 @@ jobs:
               if format == tarfile.USTAR_FORMAT:
                   format = tarfile.PAX_FORMAT
 
-              return original_tobuf(
-                  self, format, encoding, errors
+              return _original_tobuf(
+                  self,
+                  format=format,
+                  encoding=encoding,
+                  errors=errors,
               )
 
-          tarfile.TarInfo.tobuf = pax_tobuf
+          tarfile.TarInfo.tobuf = _pax_tobuf
           PY
 
-          echo "Correctif TAR préparé."
+          echo "Correctif TAR PAX préparé."
 
-      # 10. Compilation et capture exacte du code retour
       - name: Compiler APK
         working-directory: projet
         shell: bash
@@ -251,7 +242,6 @@ jobs:
 
           ls -lh "$GITHUB_WORKSPACE/apk"
 
-      # 11. Télécharger l'APK
       - name: Publier l'APK
         if: success()
         uses: actions/upload-artifact@v4
@@ -261,7 +251,6 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # 12. Conserver les journaux même en cas d'échec
       - name: Publier les journaux
         if: always()
         uses: actions/upload-artifact@v4
