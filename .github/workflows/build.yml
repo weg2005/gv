@@ -13,26 +13,27 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      # 1. Récupérer le dépôt
+      # 1. Récupération du dépôt
       - name: Récupérer le projet
         uses: actions/checkout@v4
 
-      # 2. Installer Python sans cache pip
+      # 2. Python hôte : aucun cache pip
       - name: Installer Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11.11"
 
-      # 3. Installer Java
+      # 3. Java 17
       - name: Installer Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      # 4. Dépendances Linux
+      # 4. Dépendances système
       - name: Installer les dépendances Linux
         run: |
+          set -e
           sudo apt-get update
           sudo apt-get install -y \
             git zip unzip curl wget \
@@ -43,9 +44,10 @@ jobs:
             libsqlite3-dev libbz2-dev \
             build-essential ccache patch
 
-      # 5. Installer les outils avec versions fixes
+      # 5. Versions fixes des outils
       - name: Installer Buildozer et Cython
         run: |
+          set -e
           python -m pip install "pip<24.1"
           python -m pip install \
             "setuptools==69.5.1" \
@@ -57,22 +59,22 @@ jobs:
           buildozer --version
           cython --version
 
-      # 6. Extraire et nettoyer le projet
+      # 6. Extraction de l'application
       - name: Préparer les sources
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ ! -f sql_stock.zip ]; then
-            echo "ERREUR : sql_stock.zip est absent du dépôt."
+          test -f sql_stock.zip || {
+            echo "ERREUR : sql_stock.zip absent du dépôt."
             ls -la
             exit 1
-          fi
+          }
 
-          mkdir -p projet
+          mkdir projet
           unzip -q sql_stock.zip -d projet
 
-          # Éliminer les caches et anciennes compilations
+          # Supprimer les anciens caches de compilation
           find projet -type d \( \
             -name .buildozer -o \
             -name .git -o \
@@ -100,22 +102,21 @@ jobs:
             fi
 
             dossier="$(dirname "${mains[0]}")"
-            mkdir -p source_temp
+            mkdir source_temp
             cp -a "$dossier"/. source_temp/
             rm -rf projet
             mv source_temp projet
           fi
 
           test -f projet/main.py
-
-          echo "Sources détectées :"
+          echo "Sources prêtes."
           find projet -maxdepth 2 -type f | head -200
 
-      # 7. Générer la configuration Buildozer
+      # 7. Configuration Buildozer
       - name: Créer buildozer.spec
         working-directory: projet
         run: |
-          set -euo pipefail
+          set -e
           buildozer init
 
       # 8. Configurer l'application
@@ -126,22 +127,22 @@ jobs:
           set -euo pipefail
 
           python - <<'PY'
-          import configparser
           from pathlib import Path
+          import configparser
 
           path = Path("buildozer.spec")
-          config = configparser.ConfigParser(
+          cfg = configparser.ConfigParser(
               interpolation=None,
               strict=False
           )
-          config.optionxform = str
+          cfg.optionxform = str
 
           with path.open(encoding="utf-8") as f:
-              config.read_file(f)
+              cfg.read_file(f)
 
-          app = config["app"]
+          app = cfg["app"]
 
-          values = {
+          settings = {
               "title": "Gestion Vente",
               "package.name": "gestionvente",
               "package.domain": "org.gestion",
@@ -166,24 +167,23 @@ jobs:
               "p4a.branch": "v2024.01.21",
           }
 
-          app.update(values)
+          app.update(settings)
 
-          if not config.has_section("buildozer"):
-              config.add_section("buildozer")
+          if not cfg.has_section("buildozer"):
+              cfg.add_section("buildozer")
 
-          config["buildozer"]["log_level"] = "2"
-          config["buildozer"]["warn_on_root"] = "0"
-          config["buildozer"]["build_dir"] = "/tmp/buildozer_build"
-          config["buildozer"]["bin_dir"] = "bin"
+          cfg["buildozer"]["log_level"] = "2"
+          cfg["buildozer"]["build_dir"] = "/tmp/buildozer_build"
+          cfg["buildozer"]["bin_dir"] = "bin"
 
           with path.open("w", encoding="utf-8") as f:
-              config.write(f)
+              cfg.write(f)
 
-          print(path.read_text())
+          print("Configuration Buildozer créée.")
           PY
 
-      # 9. Corriger le format TAR sans modifier tarfile.py
-      - name: Préparer le correctif PAX
+      # 9. Correctif TAR PAX sans sortie parasite
+      - name: Préparer le correctif TAR
         shell: bash
         run: |
           set -euo pipefail
@@ -193,37 +193,27 @@ jobs:
           cat > "$GITHUB_WORKSPACE/tar_patch/sitecustomize.py" <<'PY'
           import tarfile
 
-          _original_tobuf = tarfile.TarInfo.tobuf
+          original_tobuf = tarfile.TarInfo.tobuf
 
-          def _pax_tobuf(self, format, encoding, errors):
+          def pax_tobuf(
+              self,
+              format=tarfile.DEFAULT_FORMAT,
+              encoding=tarfile.ENCODING,
+              errors="surrogateescape",
+          ):
               if format == tarfile.USTAR_FORMAT:
                   format = tarfile.PAX_FORMAT
 
-              return _original_tobuf(
+              return original_tobuf(
                   self, format, encoding, errors
               )
 
-          tarfile.TarInfo.tobuf = _pax_tobuf
-
-          print(
-              "Correctif TAR PAX activé pour les archives USTAR",
-              flush=True
-          )
+          tarfile.TarInfo.tobuf = pax_tobuf
           PY
 
-          export PYTHONPATH="$GITHUB_WORKSPACE/tar_patch${PYTHONPATH:+:$PYTHONPATH}"
+          echo "Correctif TAR préparé."
 
-          python - <<'PY'
-          import tarfile
-          import sys
-
-          assert tarfile.TarInfo.tobuf is not None
-          print("Python :", sys.version)
-          print("tarfile :", tarfile.__file__)
-          print("PAX :", tarfile.PAX_FORMAT)
-          PY
-
-      # 10. Compiler l'APK
+      # 10. Compilation et capture exacte du code retour
       - name: Compiler APK
         working-directory: projet
         shell: bash
@@ -243,11 +233,10 @@ jobs:
           result=${PIPESTATUS[0]}
 
           if [ "$result" -ne 0 ]; then
-            echo "ÉCHEC : Buildozer a retourné le code $result."
+            echo "ÉCHEC DE BUILDOZER : code $result"
             exit "$result"
           fi
 
-          # Chercher l'APK généré
           if [ -d bin ]; then
             find bin -maxdepth 1 -type f -name "*.apk" \
               -exec cp -v {} "$GITHUB_WORKSPACE/apk/" \;
@@ -256,15 +245,14 @@ jobs:
           if ! find "$GITHUB_WORKSPACE/apk" \
               -maxdepth 1 -type f -name "*.apk" |
               grep -q .; then
-            echo "ERREUR : compilation terminée sans APK détecté."
+            echo "ERREUR : aucun APK n'a été produit."
             exit 1
           fi
 
-          echo "APK produit :"
           ls -lh "$GITHUB_WORKSPACE/apk"
 
-      # 11. Publier l'APK
-      - name: Récupérer l'APK
+      # 11. Télécharger l'APK
+      - name: Publier l'APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -273,8 +261,8 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # 12. Publier les logs même si la compilation échoue
-      - name: Récupérer les journaux
+      # 12. Conserver les journaux même en cas d'échec
+      - name: Publier les journaux
         if: always()
         uses: actions/upload-artifact@v4
         with:
