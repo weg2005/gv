@@ -135,15 +135,15 @@ jobs:
 
           settings = {
               "title": "Gestion Vente",
-              "package.name": "gestionvente",
-              "package.domain": "org.gestion",
+              "package.name": "wilfried",
+              "package.domain": "org.wilfried",
               "source.dir": ".",
               "source.include_exts":
                   "py,png,jpg,jpeg,kv,atlas,db,ttf,txt,json",
               "source.exclude_dirs":
                   ".buildozer,.git,__pycache__,venv,.venv,tests,docs",
               "version": "1.0.0",
-              "orientation": "portrait",
+              "orientation": "all",
               "fullscreen": "0",
               "requirements": "python3,kivy==2.3.0",
               "android.api": "34",
@@ -259,4 +259,5 @@ jobs:
           path: compilation.log
           if-no-files-found: ignore
           retention-days: 7
+
           
