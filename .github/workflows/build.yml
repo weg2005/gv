@@ -192,14 +192,13 @@ jobs:
                   return _original_create_ustar(self, info, encoding, errors)
               except ValueError as e:
                   if "name is too long" in str(e):
-                      # create_pax_header ne prend que (self, info) ou gère différemment selon la version de Python
-                      return self.create_pax_header(info)
+                      return self.create_pax_header(info, encoding, errors)
                   raise
 
           tarfile.TarInfo.create_ustar_header = _forced_pax_header
           PY
 
-          echo "Correctif TAR PAX mis à jour."
+          echo "Correctif TAR PAX corrigé avec les bons arguments."
           
       - name: Compiler APK
         working-directory: projet
