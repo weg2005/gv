@@ -105,6 +105,23 @@ jobs:
           echo "Sources prêtes."
           find projet -maxdepth 2 -type f | head -200
 
+      - name: Raccourcir les noms de fichiers trop longs
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Vérification des noms de fichiers > 90 caractères..."
+          find projet -type f | while read -r filepath; do
+            filename=$(basename "$filepath")
+            dirpath=$(dirname "$filepath")
+            if [ ${#filename} -gt 90 ]; then
+              ext="${filename##*.}"
+              base="${filename%.*}"
+              new_filename="${base:0:60}_short.${ext}"
+              mv "$filepath" "$dirpath/$new_filename"
+              echo "Renommé : $filename -> $new_filename"
+            fi
+          done
+
       - name: Créer buildozer.spec
         working-directory: projet
         run: |
@@ -143,7 +160,7 @@ jobs:
               "source.exclude_dirs":
                   ".buildozer,.git,__pycache__,venv,.venv,tests,docs",
               "version": "1.0.0",
-              "orientation":"portrait, landscape",
+              "orientation": "portrait, landscape",
               "fullscreen": "0",
               "requirements": "python3,kivy==2.3.0",
               "android.api": "34",
@@ -171,7 +188,6 @@ jobs:
           print("Configuration Buildozer créée.")
           PY
 
-      # Correctif ciblé : convertir USTAR en PAX pour les chemins longs.
       - name: Corriger TAR name too long
         shell: bash
         run: |
@@ -185,24 +201,21 @@ jobs:
           # Forcer le format global par défaut à PAX
           tarfile.DEFAULT_FORMAT = tarfile.PAX_FORMAT
 
-          # Intercepter l'initialisation de TarFile pour forcer le format PAX en écriture
-          _original_init = tarfile.TarFile.__init__
+          # Intercepter proprement la création d'en-tête ustar pour basculer en PAX en cas de dépassement
+          _original_create_ustar = tarfile.TarInfo.create_ustar_header
 
-          def _pax_tarfile_init(self, name=None, mode="r", fileobj=None, bufsize=10240, *, 
-                                format=None, tarinfo=None, encoding=None, errors="surrogateescape", 
-                                pax_headers=None, debug=None, errorlevel=None):
-              if mode in ("w", "a", "x"):
-                  format = tarfile.PAX_FORMAT
-              return _original_init(
-                  self, name=name, mode=mode, fileobj=fileobj, bufsize=bufsize,
-                  format=format, tarinfo=tarinfo, encoding=encoding, errors=errors,
-                  pax_headers=pax_headers, debug=debug, errorlevel=errorlevel
-              )
+          def _safe_create_ustar(self, info, encoding, errors):
+              try:
+                  return _original_create_ustar(self, info, encoding, errors)
+              except ValueError as e:
+                  if "name is too long" in str(e):
+                      return self.create_pax_header(info, encoding, errors)
+                  raise
 
-          tarfile.TarFile.__init__ = _pax_tarfile_init
+          tarfile.TarInfo.create_ustar_header = _safe_create_ustar
           PY
 
-          echo "Correctif TAR PAX global appliqué."
+          echo "Correctif TAR PAX sécurisé appliqué."
           
       - name: Compiler APK
         working-directory: projet
@@ -258,8 +271,4 @@ jobs:
           path: compilation.log
           if-no-files-found: ignore
           retention-days: 7
-
-
-
-
           
