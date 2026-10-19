@@ -182,29 +182,26 @@ jobs:
           cat > "$GITHUB_WORKSPACE/tar_patch/sitecustomize.py" <<'PY'
           import tarfile
 
-          _original_tobuf = tarfile.TarInfo.tobuf
+          # Forcer le format par défaut de tarfile à PAX au lieu de USTAR
+          tarfile.DEFAULT_FORMAT = tarfile.PAX_FORMAT
 
-          def _pax_tobuf(
-              self,
-              format=tarfile.DEFAULT_FORMAT,
-              encoding=tarfile.ENCODING,
-              errors="surrogateescape",
-          ):
-              if format == tarfile.USTAR_FORMAT:
-                  format = tarfile.PAX_FORMAT
+          # Intercepter également la création d'en-tête ustar pour forcer le passage en PAX
+          _original_create_ustar = tarfile.TarInfo.create_ustar_header
 
-              return _original_tobuf(
-                  self,
-                  format=format,
-                  encoding=encoding,
-                  errors=errors,
-              )
+          def _forced_pax_header(self, info, encoding, errors):
+              # Si on essaie de faire du ustar sur un nom trop long ou par défaut, on bascule en pax
+              try:
+                  return _original_create_ustar(self, info, encoding, errors)
+              except ValueError as e:
+                  if "name is too long" in str(e):
+                      return self.create_pax_header(info, encoding, errors)
+                  raise
 
-          tarfile.TarInfo.tobuf = _pax_tobuf
+          tarfile.TarInfo.create_ustar_header = _forced_pax_header
           PY
 
-          echo "Correctif TAR PAX préparé."
-
+          echo "Correctif TAR PAX renforcé préparé."
+          
       - name: Compiler APK
         working-directory: projet
         shell: bash
