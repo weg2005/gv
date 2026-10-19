@@ -182,23 +182,27 @@ jobs:
           cat > "$GITHUB_WORKSPACE/tar_patch/sitecustomize.py" <<'PY'
           import tarfile
 
-          # Forcer le format par défaut à PAX
+          # Forcer le format global par défaut à PAX
           tarfile.DEFAULT_FORMAT = tarfile.PAX_FORMAT
 
-          _original_create_ustar = tarfile.TarInfo.create_ustar_header
+          # Intercepter l'initialisation de TarFile pour forcer le format PAX en écriture
+          _original_init = tarfile.TarFile.__init__
 
-          def _forced_pax_header(self, info, encoding, errors):
-              try:
-                  return _original_create_ustar(self, info, encoding, errors)
-              except ValueError as e:
-                  if "name is too long" in str(e):
-                      return self.create_pax_header(info, encoding, errors)
-                  raise
+          def _pax_tarfile_init(self, name=None, mode="r", fileobj=None, bufsize=10240, *, 
+                                format=None, tarinfo=None, encoding=None, errors="surrogateescape", 
+                                pax_headers=None, debug=None, errorlevel=None):
+              if mode in ("w", "a", "x"):
+                  format = tarfile.PAX_FORMAT
+              return _original_init(
+                  self, name=name, mode=mode, fileobj=fileobj, bufsize=bufsize,
+                  format=format, tarinfo=tarinfo, encoding=encoding, errors=errors,
+                  pax_headers=pax_headers, debug=debug, errorlevel=errorlevel
+              )
 
-          tarfile.TarInfo.create_ustar_header = _forced_pax_header
+          tarfile.TarFile.__init__ = _pax_tarfile_init
           PY
 
-          echo "Correctif TAR PAX corrigé avec les bons arguments."
+          echo "Correctif TAR PAX global appliqué."
           
       - name: Compiler APK
         working-directory: projet
