@@ -143,7 +143,7 @@ jobs:
               "source.exclude_dirs":
                   ".buildozer,.git,__pycache__,venv,.venv,tests,docs",
               "version": "1.0.0",
-              "orientation":"orientation": "portrait, landscape",
+              "orientation":"portrait, landscape",
               "fullscreen": "0",
               "requirements": "python3,kivy==2.3.0",
               "android.api": "34",
