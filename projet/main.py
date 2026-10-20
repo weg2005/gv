@@ -1,4 +1,8 @@
 # main.py
+import os
+
+# Redirige le dossier de configuration Kivy vers le stockage interne accessible
+os.environ["KIVY_NO_CONFIGDIR"] = "1"
 
 from kivy.app import App
 from kivy.uix.screenmanager import ScreenManager
