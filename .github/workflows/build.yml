@@ -162,7 +162,7 @@ jobs:
               "version": "1.0.0",
               "orientation": "portrait, landscape",
               "fullscreen": "0",
-              "requirements": "python3,kivy==2.3.0,fpdf,numpy,pandas,matplotlib==3.5.3",
+              "requirements": "python3,kivy==2.3.0,fpdf,numpy,pandas,matplotlib==3.5.3,python-escpos",
               
               "android.api": "34",
               "android.minapi": "24",
