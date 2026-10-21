@@ -162,7 +162,7 @@ jobs:
               "version": "1.0.0",
               "orientation": "portrait, landscape",
               "fullscreen": "0",
-              requirements = "python3,kivy==2.3.0,fpdf,python-escpos,pyusb,Pillow,qrcode,pyserial,six,python-barcode,python-dateutil,pytz,kivy-garden.graph,pyjnius"
+              "requirements": "python3,kivy==2.3.0,fpdf,python-escpos,pyusb,Pillow,qrcode,pyserial,six,python-barcode,python-dateutil,pytz,kivy-garden.graph,pyjnius"
               ,
               "android.api": "34",
               "android.minapi": "24",
